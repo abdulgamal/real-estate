@@ -119,17 +119,16 @@ export default function HomePage() {
                 <ArrowRight className="h-5 w-5" />
               </Link>
             </Button>
-            {/* <Button
+            <Button
               asChild
-              variant="outline"
               size="lg"
-              className="border-white text-white hover:bg-white/10 text-lg px-8 py-3"
+              className="bg-white text-blue-600 hover:bg-blue-50 text-lg px-8 py-3"
             >
-              <Link href="#features" className="flex items-center gap-2">
-                Learn More
-                <MessageCircle className="h-5 w-5" />
+              <Link href="/dashboard" className="flex items-center gap-2">
+                Dashboard
+                {/* <ArrowRight className="h-5 w-5" /> */}
               </Link>
-            </Button> */}
+            </Button>
           </div>
 
           {/* Trust Indicators */}
@@ -350,16 +349,16 @@ export default function HomePage() {
                 <ArrowRight className="h-5 w-5" />
               </Link>
             </Button>
-            {/* <Button
+            <Button
               asChild
-              variant="outline"
               size="lg"
-              className="border-white text-white hover:bg-white/10 px-8 py-3 text-lg"
+              className="bg-blue-600 hover:bg-blue-700 px-8 py-3 text-lg"
             >
-              <Link href="#features" className="flex items-center gap-2">
-                Learn More
+              <Link href="/dashboard" className="flex items-center gap-2">
+                Dashboard
+                {/* <ArrowRight className="h-5 w-5" /> */}
               </Link>
-            </Button> */}
+            </Button>
           </div>
           <div className="mt-8 flex items-center justify-center gap-4 text-sm text-gray-400">
             <Lock className="h-4 w-4" />
