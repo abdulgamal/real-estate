@@ -20,11 +20,16 @@ import {
   Home,
   Shield,
   Clock,
+  Upload,
+  Check,
+  X,
 } from "lucide-react";
+import UlizaChatbot from "@/components/UlizaChatbot";
 
 export default function MortgageOrigination() {
   const [currentTab, setCurrentTab] = useState("personal");
   const [applicationProgress, setApplicationProgress] = useState({});
+  const [uploadedDocuments, setUploadedDocuments] = useState({});
 
   const tabs = [
     { id: "personal", label: "Personal Info", icon: User },
@@ -661,58 +666,151 @@ export default function MortgageOrigination() {
 
                   {/* Documents Tab */}
                   <TabsContent value="documents" className="space-y-6">
-                    <div className="space-y-6">
-                      <div className="border rounded-lg p-4">
-                        <h4 className="font-medium mb-3">
-                          Required Documents Checklist
-                        </h4>
-                        <div className="space-y-3">
-                          <div className="flex items-center gap-3">
-                            <input type="checkbox" className="w-4 h-4" />
-                            <span className="text-sm">
-                              Government-issued photo ID
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <input type="checkbox" className="w-4 h-4" />
-                            <span className="text-sm">
-                              2 most recent pay stubs
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <input type="checkbox" className="w-4 h-4" />
-                            <span className="text-sm">
-                              2 years W-2s or 1099s
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <input type="checkbox" className="w-4 h-4" />
-                            <span className="text-sm">
-                              2-3 months bank statements
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <input type="checkbox" className="w-4 h-4" />
-                            <span className="text-sm">
-                              Investment account statements
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <input type="checkbox" className="w-4 h-4" />
-                            <span className="text-sm">
-                              Purchase contract (if applicable)
-                            </span>
-                          </div>
-                        </div>
-                      </div>
+                    <div className="space-y-4">
+                      <h4 className="font-medium mb-3">
+                        Required Documents Checklist
+                      </h4>
+                      <div className="space-y-4">
+                        {[
+                          {
+                            id: "photoId",
+                            label: "Government-issued photo ID",
+                            required: true,
+                          },
+                          {
+                            id: "payStubs",
+                            label: "2 most recent pay stubs",
+                            required: true,
+                          },
+                          {
+                            id: "w2s",
+                            label: "2 years W-2s or 1099s",
+                            required: true,
+                          },
+                          {
+                            id: "bankStatements",
+                            label: "2-3 months bank statements",
+                            required: true,
+                          },
+                          {
+                            id: "investmentStatements",
+                            label: "Investment account statements",
+                            required: true,
+                          },
+                          {
+                            id: "purchaseContract",
+                            label: "Purchase contract (if applicable)",
+                            required: false,
+                          },
+                        ].map((doc) => {
+                          const file = uploadedDocuments[doc.id];
+                          const inputId = `upload-${doc.id}`;
 
-                      <div className="border-2 border-dashed rounded-lg p-8 text-center">
-                        <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                        <h4 className="font-medium mb-2">Upload Documents</h4>
-                        <p className="text-sm text-gray-600 mb-4">
-                          Drag and drop files here or click to browse
-                        </p>
-                        <Button variant="outline">Select Files</Button>
+                          const handleFileChange = (e) => {
+                            const selectedFile = e.target.files[0];
+                            if (selectedFile) {
+                              setUploadedDocuments((prev) => ({
+                                ...prev,
+                                [doc.id]: selectedFile,
+                              }));
+                            }
+                          };
+
+                          const handleRemoveFile = () => {
+                            setUploadedDocuments((prev) => {
+                              const newState = { ...prev };
+                              delete newState[doc.id];
+                              return newState;
+                            });
+                            // Reset the input
+                            const input = document.getElementById(inputId);
+                            if (input) input.value = "";
+                          };
+
+                          return (
+                            <div
+                              key={doc.id}
+                              className="border rounded-lg p-4 hover:border-blue-300 transition-colors"
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="flex items-start gap-3 flex-1">
+                                  <div className="mt-1">
+                                    {file ? (
+                                      <Check className="h-5 w-5 text-green-600" />
+                                    ) : (
+                                      <div
+                                        className={`w-5 h-5 rounded-full border-2 ${
+                                          doc.required
+                                            ? "border-red-500"
+                                            : "border-gray-300"
+                                        }`}
+                                      />
+                                    )}
+                                  </div>
+                                  <div className="flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-sm font-medium">
+                                        {doc.label}
+                                      </span>
+                                      {doc.required && !file && (
+                                        <Badge
+                                          variant="destructive"
+                                          className="text-xs"
+                                        >
+                                          Required
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {file && (
+                                      <div className="mt-2 flex items-center gap-2 text-xs text-gray-600">
+                                        <FileText className="h-3 w-3" />
+                                        <span>{file.name}</span>
+                                        <span className="text-gray-400">
+                                          ({(file.size / 1024).toFixed(1)} KB)
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {file ? (
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={handleRemoveFile}
+                                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                    >
+                                      <X className="h-4 w-4 mr-1" />
+                                      Remove
+                                    </Button>
+                                  ) : (
+                                    <>
+                                      <input
+                                        id={inputId}
+                                        type="file"
+                                        className="hidden"
+                                        onChange={handleFileChange}
+                                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                                      />
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() =>
+                                          document.getElementById(inputId)?.click()
+                                        }
+                                      >
+                                        <Upload className="h-4 w-4 mr-1" />
+                                        Upload
+                                      </Button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
 
@@ -844,6 +942,7 @@ export default function MortgageOrigination() {
           </div>
         </div>
       </div>
+      <UlizaChatbot />
     </div>
   );
 }
