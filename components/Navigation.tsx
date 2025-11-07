@@ -23,7 +23,7 @@ export default function Navigation() {
 
   const navigation: NavigationItem[] = [
     { name: "Home", href: "/", icon: Home },
-    { name: "Application", href: "/application", icon: FileText },
+    { name: "Intake", href: "/application", icon: FileText },
     { name: "Dashboard", href: "/dashboard", icon: BarChart3 },
     { name: "Uliza", href: "/uliza", icon: MessageCircle },
   ];

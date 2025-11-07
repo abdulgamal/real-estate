@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Card,
   CardContent,
@@ -23,13 +23,289 @@ import {
   Upload,
   Check,
   X,
+  Save,
 } from "lucide-react";
 import UlizaChatbot from "@/components/UlizaChatbot";
+
+const STORAGE_KEY = "mortgage_application_data";
+const MAX_FILE_SIZE_FOR_STORAGE = 2 * 1024 * 1024; // 2 MB per document
+
+const createInitialFormData = () => ({
+  personal: {
+    fullName: "",
+    dateOfBirth: "",
+    ssn: "",
+    maritalStatus: "",
+    streetAddress: "",
+    city: "",
+    state: "",
+    zipCode: "",
+  },
+  employment: {
+    employerName: "",
+    position: "",
+    lengthOfEmployment: "",
+    phoneNumber: "",
+    annualIncome: "",
+    employmentType: "",
+  },
+  assets: {
+    checkingBalance: "",
+    savingsBalance: "",
+    retirementAccounts: "",
+    stocksBonds: "",
+    downPaymentSource: "",
+  },
+  debts: {
+    rentMortgage: "",
+    autoLoans: "",
+    studentLoans: "",
+    creditCardDebt: "",
+    otherLoans: "",
+  },
+  property: {
+    propertyAddress: "",
+    propertyCity: "",
+    propertyState: "",
+    propertyZip: "",
+    purchasePrice: "",
+    loanAmount: "",
+    downPayment: "",
+    loanType: "",
+    loanTerm: "",
+  },
+  disclosures: {
+    creditAuthorization: false,
+    loanEstimateAck: false,
+    appraisalRights: false,
+    privacyNotices: false,
+    californiaPerDiem: false,
+  },
+});
 
 export default function MortgageOrigination() {
   const [currentTab, setCurrentTab] = useState("personal");
   const [applicationProgress, setApplicationProgress] = useState({});
   const [uploadedDocuments, setUploadedDocuments] = useState({});
+  const [saveStatus, setSaveStatus] = useState(""); // "saved", "saving", ""
+  const [saveError, setSaveError] = useState("");
+
+  const hasHydratedRef = useRef(false);
+  const skipDocAutoSaveRef = useRef(false);
+  
+  // Form data state
+  const [formData, setFormData] = useState(createInitialFormData);
+
+  // Helper function to convert File to base64
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
+  // Helper function to convert base64 back to File
+  const base64ToFile = (base64String, fileName, mimeType) => {
+    const byteCharacters = atob(base64String.split(',')[1]);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    return new File([byteArray], fileName, { type: mimeType });
+  };
+
+  // Load saved data on mount
+  useEffect(() => {
+    setSaveError("");
+    try {
+      const savedData = localStorage.getItem(STORAGE_KEY);
+      if (savedData) {
+        const parsed = JSON.parse(savedData);
+        if (parsed.formData) {
+          setFormData(parsed.formData);
+        }
+        if (parsed.applicationProgress) {
+          setApplicationProgress(parsed.applicationProgress);
+        }
+        if (parsed.currentTab) {
+          setCurrentTab(parsed.currentTab);
+        }
+        
+        // Restore documents from base64 if available
+        if (parsed.uploadedDocuments) {
+          const restoredDocuments = {};
+          let hasTooLarge = false;
+          Object.keys(parsed.uploadedDocuments).forEach((key) => {
+            const doc = parsed.uploadedDocuments[key];
+            // If base64 is present, convert back to File object
+            if (doc.base64) {
+              try {
+                const file = base64ToFile(doc.base64, doc.name, doc.type);
+                restoredDocuments[key] = file;
+              } catch (error) {
+                console.error(`Error restoring file ${key}:`, error);
+                // Keep metadata if file restoration fails
+                restoredDocuments[key] = doc;
+              }
+            } else {
+              // Just metadata (from old saves or failed conversions)
+              restoredDocuments[key] = doc;
+            }
+            if (doc.tooLarge) {
+              hasTooLarge = true;
+            }
+          });
+          setUploadedDocuments(restoredDocuments);
+          if (hasTooLarge) {
+            setSaveError(
+              "Some documents were too large to save automatically. Please re-upload those files when you return."
+            );
+          }
+        }
+        
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus(""), 2000);
+      }
+    } catch (error) {
+      console.error("Error loading saved data:", error);
+    }
+    skipDocAutoSaveRef.current = true;
+    hasHydratedRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Save function - only called when user clicks Continue
+  const saveToStorage = useCallback(async () => {
+    try {
+      setSaveStatus("saving");
+      setSaveError("");
+      
+      // Convert file objects to base64 for storage
+      const documentMetadata = {};
+      const largeFiles = [];
+      const filePromises = Object.keys(uploadedDocuments).map(async (key) => {
+        const file = uploadedDocuments[key];
+        if (file instanceof File) {
+          if (file.size > MAX_FILE_SIZE_FOR_STORAGE) {
+            largeFiles.push(file.name);
+            documentMetadata[key] = {
+              name: file.name,
+              size: file.size,
+              type: file.type,
+              lastModified: file.lastModified,
+              tooLarge: true,
+            };
+          } else {
+            try {
+              const base64 = await fileToBase64(file);
+              documentMetadata[key] = {
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                lastModified: file.lastModified,
+                base64: base64, // Store the actual file content
+              };
+            } catch (error) {
+              console.error(`Error converting file ${key} to base64:`, error);
+              // Fallback to metadata only if conversion fails
+              documentMetadata[key] = {
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                lastModified: file.lastModified,
+              };
+            }
+          }
+        } else {
+          documentMetadata[key] = file;
+        }
+      });
+
+      await Promise.all(filePromises);
+
+      if (largeFiles.length > 0) {
+        setSaveError(
+          `We saved your information, but these files are larger than ${(MAX_FILE_SIZE_FOR_STORAGE / (1024 * 1024)).toFixed(1)} MB and will need to be re-uploaded next time: ${largeFiles.join(", ")}`
+        );
+      }
+
+      const dataToSave = {
+        formData,
+        applicationProgress,
+        currentTab,
+        uploadedDocuments: documentMetadata,
+        lastSaved: new Date().toISOString(),
+      };
+
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus(""), 3000);
+      } catch (storageError) {
+        // Handle localStorage quota exceeded
+        if (storageError.name === 'QuotaExceededError') {
+          console.error("Storage quota exceeded. Some files may be too large.");
+          // Try saving without file content
+          const metadataOnly = {};
+          Object.keys(documentMetadata).forEach((key) => {
+            const doc = documentMetadata[key];
+            metadataOnly[key] = {
+              name: doc.name,
+              size: doc.size,
+              type: doc.type,
+              lastModified: doc.lastModified,
+            };
+          });
+          const dataToSaveMetadata = {
+            formData,
+            applicationProgress,
+            currentTab,
+            uploadedDocuments: metadataOnly,
+            lastSaved: new Date().toISOString(),
+          };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSaveMetadata));
+          setSaveStatus("saved");
+          setTimeout(() => setSaveStatus(""), 3000);
+          setSaveError(
+            "We saved your details, but couldn't save document files because the browser storage limit was exceeded. You'll need to re-upload them next time."
+          );
+        } else {
+          throw storageError;
+        }
+      }
+    } catch (error) {
+      console.error("Error saving data:", error);
+      setSaveStatus("");
+    }
+  }, [formData, applicationProgress, currentTab, uploadedDocuments]);
+
+  useEffect(() => {
+    if (!hasHydratedRef.current) {
+      return;
+    }
+    if (skipDocAutoSaveRef.current) {
+      skipDocAutoSaveRef.current = false;
+      return;
+    }
+
+    saveToStorage();
+    // We intentionally omit skipDocAutoSaveRef from deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadedDocuments, saveToStorage]);
+
+  // Update form data helper
+  const updateFormData = (section, field, value) => {
+    setFormData((prev) => ({
+      ...prev,
+      [section]: {
+        ...prev[section],
+        [field]: value,
+      },
+    }));
+  };
 
   const tabs = [
     { id: "personal", label: "Personal Info", icon: User },
@@ -41,13 +317,17 @@ export default function MortgageOrigination() {
     { id: "disclosures", label: "Disclosures", icon: Shield },
   ];
 
-  const handleTabChange = (value) => {
+  const handleTabChange = (value, shouldSave = false) => {
     setCurrentTab(value);
     // Mark this section as viewed
     setApplicationProgress((prev) => ({
       ...prev,
       [value]: true,
     }));
+    // Save only when Continue button is clicked
+    if (shouldSave) {
+      saveToStorage();
+    }
   };
 
   const progressPercentage = Math.round(
@@ -60,18 +340,46 @@ export default function MortgageOrigination() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            Mortgage Application
+            Mortgage Intake
           </h1>
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Complete your mortgage application in simple steps. All information
+            Complete your mortgage intake in simple steps. All information
             is securely encrypted.
           </p>
+
+          {/* Save Status Indicator */}
+          <div className="mt-4 flex items-center justify-center gap-2">
+            {saveStatus === "saving" && (
+              <div className="flex items-center gap-2 text-sm text-blue-600 font-medium">
+                <Save className="h-4 w-4 animate-pulse" />
+                <span>Saving your progress...</span>
+              </div>
+            )}
+            {saveStatus === "saved" && (
+              <div className="flex items-center gap-2 text-sm text-green-600 font-medium">
+                <Check className="h-4 w-4" />
+                <span>Your progress has been saved automatically</span>
+              </div>
+            )}
+          </div>
+          {saveError && (
+            <div className="mt-2 text-center">
+              <p className="text-sm text-red-600 font-medium">{saveError}</p>
+            </div>
+          )}
+          
+          {/* Info message about saving */}
+          <div className="mt-2 text-center">
+            <p className="text-xs text-gray-500">
+              💾 Your information is saved when you click "Continue". Files larger than 2&nbsp;MB are remembered in your checklist but will need to be re-uploaded when you return.
+            </p>
+          </div>
 
           {/* Progress Bar */}
           <div className="mt-6 max-w-2xl mx-auto">
             <div className="flex justify-between mb-2">
               <span className="text-sm font-medium text-gray-700">
-                Application Progress
+                Intake Progress
               </span>
               <span className="text-sm font-medium text-gray-700">
                 {progressPercentage}%
@@ -93,7 +401,7 @@ export default function MortgageOrigination() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <FileText className="h-5 w-5" />
-                  Application Steps
+                  Intake Steps
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
@@ -214,6 +522,8 @@ export default function MortgageOrigination() {
                           type="text"
                           className="w-full p-2 border rounded-md"
                           placeholder="John A. Smith"
+                          value={formData.personal.fullName}
+                          onChange={(e) => updateFormData("personal", "fullName", e.target.value)}
                         />
                       </div>
                       <div className="space-y-2">
@@ -223,6 +533,8 @@ export default function MortgageOrigination() {
                         <input
                           type="date"
                           className="w-full p-2 border rounded-md"
+                          value={formData.personal.dateOfBirth}
+                          onChange={(e) => updateFormData("personal", "dateOfBirth", e.target.value)}
                         />
                       </div>
                       <div className="space-y-2">
@@ -233,13 +545,19 @@ export default function MortgageOrigination() {
                           type="text"
                           className="w-full p-2 border rounded-md"
                           placeholder="XXX-XX-XXXX"
+                          value={formData.personal.ssn}
+                          onChange={(e) => updateFormData("personal", "ssn", e.target.value)}
                         />
                       </div>
                       <div className="space-y-2">
                         <label className="text-sm font-medium">
                           Marital Status
                         </label>
-                        <select className="w-full p-2 border rounded-md">
+                        <select 
+                          className="w-full p-2 border rounded-md"
+                          value={formData.personal.maritalStatus}
+                          onChange={(e) => updateFormData("personal", "maritalStatus", e.target.value)}
+                        >
                           <option value="">Select</option>
                           <option value="single">Single</option>
                           <option value="married">Married</option>
@@ -260,6 +578,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="123 Main St"
+                            value={formData.personal.streetAddress}
+                            onChange={(e) => updateFormData("personal", "streetAddress", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -268,6 +588,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="Los Angeles"
+                            value={formData.personal.city}
+                            onChange={(e) => updateFormData("personal", "city", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -276,6 +598,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="CA"
+                            value={formData.personal.state}
+                            onChange={(e) => updateFormData("personal", "state", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -286,6 +610,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="90001"
+                            value={formData.personal.zipCode}
+                            onChange={(e) => updateFormData("personal", "zipCode", e.target.value)}
                           />
                         </div>
                       </div>
@@ -293,7 +619,7 @@ export default function MortgageOrigination() {
 
                     <div className="flex justify-between pt-4">
                       <div></div>
-                      <Button onClick={() => handleTabChange("employment")}>
+                      <Button onClick={() => handleTabChange("employment", true)}>
                         Continue to Employment & Income
                       </Button>
                     </div>
@@ -312,6 +638,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="ABC Corporation"
+                            value={formData.employment.employerName}
+                            onChange={(e) => updateFormData("employment", "employerName", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -322,6 +650,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="Software Engineer"
+                            value={formData.employment.position}
+                            onChange={(e) => updateFormData("employment", "position", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -332,6 +662,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="3 years"
+                            value={formData.employment.lengthOfEmployment}
+                            onChange={(e) => updateFormData("employment", "lengthOfEmployment", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -342,6 +674,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="(555) 123-4567"
+                            value={formData.employment.phoneNumber}
+                            onChange={(e) => updateFormData("employment", "phoneNumber", e.target.value)}
                           />
                         </div>
                       </div>
@@ -358,13 +692,20 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$85,000"
+                            value={formData.employment.annualIncome}
+                            onChange={(e) => updateFormData("employment", "annualIncome", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
                           <label className="text-sm font-medium">
                             Employment Type
                           </label>
-                          <select className="w-full p-2 border rounded-md">
+                          <select 
+                            className="w-full p-2 border rounded-md"
+                            value={formData.employment.employmentType}
+                            onChange={(e) => updateFormData("employment", "employmentType", e.target.value)}
+                          >
+                            <option value="">Select</option>
                             <option value="w2">W-2 Employee</option>
                             <option value="self">Self-Employed</option>
                             <option value="1099">1099 Contractor</option>
@@ -380,7 +721,7 @@ export default function MortgageOrigination() {
                       >
                         Back
                       </Button>
-                      <Button onClick={() => handleTabChange("assets")}>
+                      <Button onClick={() => handleTabChange("assets", true)}>
                         Continue to Assets
                       </Button>
                     </div>
@@ -399,6 +740,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$5,000"
+                            value={formData.assets.checkingBalance}
+                            onChange={(e) => updateFormData("assets", "checkingBalance", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -409,6 +752,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$15,000"
+                            value={formData.assets.savingsBalance}
+                            onChange={(e) => updateFormData("assets", "savingsBalance", e.target.value)}
                           />
                         </div>
                       </div>
@@ -425,6 +770,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$45,000"
+                            value={formData.assets.retirementAccounts}
+                            onChange={(e) => updateFormData("assets", "retirementAccounts", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -435,6 +782,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$12,000"
+                            value={formData.assets.stocksBonds}
+                            onChange={(e) => updateFormData("assets", "stocksBonds", e.target.value)}
                           />
                         </div>
                       </div>
@@ -446,7 +795,12 @@ export default function MortgageOrigination() {
                         <label className="text-sm font-medium">
                           Source of Down Payment
                         </label>
-                        <select className="w-full p-2 border rounded-md">
+                        <select 
+                          className="w-full p-2 border rounded-md"
+                          value={formData.assets.downPaymentSource}
+                          onChange={(e) => updateFormData("assets", "downPaymentSource", e.target.value)}
+                        >
+                          <option value="">Select</option>
                           <option value="savings">Personal Savings</option>
                           <option value="gift">Gift Funds</option>
                           <option value="retirement">Retirement Account</option>
@@ -462,7 +816,7 @@ export default function MortgageOrigination() {
                       >
                         Back
                       </Button>
-                      <Button onClick={() => handleTabChange("debts")}>
+                      <Button onClick={() => handleTabChange("debts", true)}>
                         Continue to Debts
                       </Button>
                     </div>
@@ -483,6 +837,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$1,500"
+                            value={formData.debts.rentMortgage}
+                            onChange={(e) => updateFormData("debts", "rentMortgage", e.target.value)}
                           />
                         </div>
                       </div>
@@ -499,6 +855,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$8,000"
+                            value={formData.debts.autoLoans}
+                            onChange={(e) => updateFormData("debts", "autoLoans", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -509,6 +867,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$25,000"
+                            value={formData.debts.studentLoans}
+                            onChange={(e) => updateFormData("debts", "studentLoans", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -519,6 +879,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$2,500"
+                            value={formData.debts.creditCardDebt}
+                            onChange={(e) => updateFormData("debts", "creditCardDebt", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -529,6 +891,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$0"
+                            value={formData.debts.otherLoans}
+                            onChange={(e) => updateFormData("debts", "otherLoans", e.target.value)}
                           />
                         </div>
                       </div>
@@ -541,7 +905,7 @@ export default function MortgageOrigination() {
                       >
                         Back
                       </Button>
-                      <Button onClick={() => handleTabChange("property")}>
+                      <Button onClick={() => handleTabChange("property", true)}>
                         Continue to Property
                       </Button>
                     </div>
@@ -560,6 +924,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="456 Oak Avenue"
+                            value={formData.property.propertyAddress}
+                            onChange={(e) => updateFormData("property", "propertyAddress", e.target.value)}
                           />
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -569,6 +935,8 @@ export default function MortgageOrigination() {
                               type="text"
                               className="w-full p-2 border rounded-md"
                               placeholder="San Francisco"
+                              value={formData.property.propertyCity}
+                              onChange={(e) => updateFormData("property", "propertyCity", e.target.value)}
                             />
                           </div>
                           <div className="space-y-2">
@@ -577,6 +945,8 @@ export default function MortgageOrigination() {
                               type="text"
                               className="w-full p-2 border rounded-md"
                               placeholder="CA"
+                              value={formData.property.propertyState}
+                              onChange={(e) => updateFormData("property", "propertyState", e.target.value)}
                             />
                           </div>
                           <div className="space-y-2">
@@ -587,6 +957,8 @@ export default function MortgageOrigination() {
                               type="text"
                               className="w-full p-2 border rounded-md"
                               placeholder="94102"
+                              value={formData.property.propertyZip}
+                              onChange={(e) => updateFormData("property", "propertyZip", e.target.value)}
                             />
                           </div>
                           <div className="space-y-2">
@@ -597,6 +969,8 @@ export default function MortgageOrigination() {
                               type="text"
                               className="w-full p-2 border rounded-md"
                               placeholder="$450,000"
+                              value={formData.property.purchasePrice}
+                              onChange={(e) => updateFormData("property", "purchasePrice", e.target.value)}
                             />
                           </div>
                         </div>
@@ -614,6 +988,8 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$360,000"
+                            value={formData.property.loanAmount}
+                            onChange={(e) => updateFormData("property", "loanAmount", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
@@ -624,13 +1000,20 @@ export default function MortgageOrigination() {
                             type="text"
                             className="w-full p-2 border rounded-md"
                             placeholder="$90,000"
+                            value={formData.property.downPayment}
+                            onChange={(e) => updateFormData("property", "downPayment", e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
                           <label className="text-sm font-medium">
                             Loan Type
                           </label>
-                          <select className="w-full p-2 border rounded-md">
+                          <select 
+                            className="w-full p-2 border rounded-md"
+                            value={formData.property.loanType}
+                            onChange={(e) => updateFormData("property", "loanType", e.target.value)}
+                          >
+                            <option value="">Select</option>
                             <option value="conventional">Conventional</option>
                             <option value="fha">FHA</option>
                             <option value="va">VA</option>
@@ -641,7 +1024,12 @@ export default function MortgageOrigination() {
                           <label className="text-sm font-medium">
                             Loan Term
                           </label>
-                          <select className="w-full p-2 border rounded-md">
+                          <select 
+                            className="w-full p-2 border rounded-md"
+                            value={formData.property.loanTerm}
+                            onChange={(e) => updateFormData("property", "loanTerm", e.target.value)}
+                          >
+                            <option value="">Select</option>
                             <option value="30">30 Year Fixed</option>
                             <option value="15">15 Year Fixed</option>
                             <option value="arm5">5/1 ARM</option>
@@ -658,7 +1046,7 @@ export default function MortgageOrigination() {
                       >
                         Back
                       </Button>
-                      <Button onClick={() => handleTabChange("documents")}>
+                      <Button onClick={() => handleTabChange("documents", true)}>
                         Continue to Documents
                       </Button>
                     </div>
@@ -704,6 +1092,15 @@ export default function MortgageOrigination() {
                           },
                         ].map((doc) => {
                           const file = uploadedDocuments[doc.id];
+                          const fileDetails = file
+                            ? file instanceof File
+                              ? {
+                                  name: file.name,
+                                  size: file.size,
+                                  tooLarge: false,
+                                }
+                              : file
+                            : null;
                           const inputId = `upload-${doc.id}`;
 
                           const handleFileChange = (e) => {
@@ -761,13 +1158,18 @@ export default function MortgageOrigination() {
                                         </Badge>
                                       )}
                                     </div>
-                                    {file && (
+                                  {fileDetails && (
                                       <div className="mt-2 flex items-center gap-2 text-xs text-gray-600">
                                         <FileText className="h-3 w-3" />
-                                        <span>{file.name}</span>
+                                      <span>{fileDetails.name || "Document"}</span>
                                         <span className="text-gray-400">
-                                          ({(file.size / 1024).toFixed(1)} KB)
+                                        ({fileDetails.size ? (fileDetails.size / 1024).toFixed(1) : "0"} KB)
                                         </span>
+                                      {fileDetails.tooLarge && (
+                                        <Badge variant="destructive" className="text-[10px]">
+                                          Too large to auto-save
+                                        </Badge>
+                                      )}
                                       </div>
                                     )}
                                   </div>
@@ -821,7 +1223,7 @@ export default function MortgageOrigination() {
                       >
                         Back
                       </Button>
-                      <Button onClick={() => handleTabChange("disclosures")}>
+                      <Button onClick={() => handleTabChange("disclosures", true)}>
                         Continue to Disclosures
                       </Button>
                     </div>
@@ -836,7 +1238,12 @@ export default function MortgageOrigination() {
                         </h4>
                         <div className="space-y-4">
                           <div className="flex items-start gap-3">
-                            <input type="checkbox" className="w-4 h-4 mt-1" />
+                            <input 
+                              type="checkbox" 
+                              className="w-4 h-4 mt-1" 
+                              checked={formData.disclosures.creditAuthorization}
+                              onChange={(e) => updateFormData("disclosures", "creditAuthorization", e.target.checked)}
+                            />
                             <div>
                               <span className="text-sm font-medium">
                                 Credit Authorization
@@ -844,24 +1251,34 @@ export default function MortgageOrigination() {
                               <p className="text-xs text-gray-600 mt-1">
                                 I authorize the lender to pull my credit report
                                 and verify information provided in this
-                                application.
+                                intake.
                               </p>
                             </div>
                           </div>
                           <div className="flex items-start gap-3">
-                            <input type="checkbox" className="w-4 h-4 mt-1" />
+                            <input 
+                              type="checkbox" 
+                              className="w-4 h-4 mt-1" 
+                              checked={formData.disclosures.loanEstimateAck}
+                              onChange={(e) => updateFormData("disclosures", "loanEstimateAck", e.target.checked)}
+                            />
                             <div>
                               <span className="text-sm font-medium">
                                 Loan Estimate Acknowledgement
                               </span>
                               <p className="text-xs text-gray-600 mt-1">
                                 I understand I will receive a Loan Estimate
-                                within 3 business days of application.
+                                within 3 business days of intake.
                               </p>
                             </div>
                           </div>
                           <div className="flex items-start gap-3">
-                            <input type="checkbox" className="w-4 h-4 mt-1" />
+                            <input 
+                              type="checkbox" 
+                              className="w-4 h-4 mt-1" 
+                              checked={formData.disclosures.appraisalRights}
+                              onChange={(e) => updateFormData("disclosures", "appraisalRights", e.target.checked)}
+                            />
                             <div>
                               <span className="text-sm font-medium">
                                 Appraisal Rights
@@ -873,7 +1290,12 @@ export default function MortgageOrigination() {
                             </div>
                           </div>
                           <div className="flex items-start gap-3">
-                            <input type="checkbox" className="w-4 h-4 mt-1" />
+                            <input 
+                              type="checkbox" 
+                              className="w-4 h-4 mt-1" 
+                              checked={formData.disclosures.privacyNotices}
+                              onChange={(e) => updateFormData("disclosures", "privacyNotices", e.target.checked)}
+                            />
                             <div>
                               <span className="text-sm font-medium">
                                 Privacy Notices
@@ -886,7 +1308,12 @@ export default function MortgageOrigination() {
                             </div>
                           </div>
                           <div className="flex items-start gap-3">
-                            <input type="checkbox" className="w-4 h-4 mt-1" />
+                            <input 
+                              type="checkbox" 
+                              className="w-4 h-4 mt-1" 
+                              checked={formData.disclosures.californiaPerDiem}
+                              onChange={(e) => updateFormData("disclosures", "californiaPerDiem", e.target.checked)}
+                            />
                             <div>
                               <span className="text-sm font-medium">
                                 California Per-Diem Disclosure
@@ -931,8 +1358,28 @@ export default function MortgageOrigination() {
                       >
                         Back
                       </Button>
-                      <Button className="bg-green-600 hover:bg-green-700">
-                        Submit Application
+                      <Button 
+                        className="bg-green-600 hover:bg-green-700"
+                        onClick={async () => {
+                          try {
+                            await saveToStorage();
+                          } catch (error) {
+                            console.error("Error saving before submission:", error);
+                          }
+
+                          localStorage.removeItem(STORAGE_KEY);
+                          skipDocAutoSaveRef.current = true;
+                          setFormData(createInitialFormData());
+                          setApplicationProgress({});
+                          setUploadedDocuments({});
+                          setCurrentTab("personal");
+                          setSaveStatus("");
+                          setSaveError("");
+
+                          alert("Application submitted successfully!");
+                        }}
+                      >
+                        Submit Intake
                       </Button>
                     </div>
                   </TabsContent>
